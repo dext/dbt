@@ -1,5 +1,4 @@
-from dbt.logger import initialize_logger, GLOBAL_LOGGER as logger, \
-    logger_initialized, log_cache_events
+from dbt.logger import GLOBAL_LOGGER as logger, log_cache_events, log_manager
 
 import argparse
 import os.path
@@ -23,18 +22,16 @@ import dbt.task.serve as serve_task
 import dbt.task.freshness as freshness_task
 import dbt.task.run_operation as run_operation_task
 from dbt.task.list import ListTask
-from dbt.task.migrate import MigrationTask
 from dbt.task.rpc_server import RPCServerTask
 from dbt.adapters.factory import reset_adapters
 
 import dbt.tracking
 import dbt.ui.printer
-import dbt.compat
 import dbt.deprecations
 import dbt.profiler
 
 from dbt.utils import ExitCodes
-from dbt.config import UserConfig, PROFILES_DIR
+from dbt.config import PROFILES_DIR, read_user_config
 from dbt.exceptions import RuntimeException
 
 
@@ -55,7 +52,7 @@ class DBTVersion(argparse.Action):
                  dest=argparse.SUPPRESS,
                  default=argparse.SUPPRESS,
                  help="show program's version number and exit"):
-        super(DBTVersion, self).__init__(
+        super().__init__(
             option_strings=option_strings,
             dest=dest,
             default=default,
@@ -70,7 +67,7 @@ class DBTVersion(argparse.Action):
 
 class DBTArgumentParser(argparse.ArgumentParser):
     def __init__(self, *args, **kwargs):
-        super(DBTArgumentParser, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.register('action', 'dbtversion', DBTVersion)
 
 
@@ -81,32 +78,30 @@ def main(args=None):
     try:
         results, succeeded = handle_and_check(args)
         if succeeded:
-            exit_code = ExitCodes.Success
+            exit_code = ExitCodes.Success.value
         else:
-            exit_code = ExitCodes.ModelError
+            exit_code = ExitCodes.ModelError.value
 
     except KeyboardInterrupt:
         logger.info("ctrl-c")
-        exit_code = ExitCodes.UnhandledError
+        exit_code = ExitCodes.UnhandledError.value
 
     # This can be thrown by eg. argparse
     except SystemExit as e:
         exit_code = e.code
 
     except BaseException as e:
-        logger.warn("Encountered an error:")
-        logger.warn(str(e))
+        logger.warning("Encountered an error:")
+        logger.warning(str(e))
 
-        if logger_initialized():
+        if log_manager.initialized:
             logger.debug(traceback.format_exc())
         elif not isinstance(e, RuntimeException):
             # if it did not come from dbt proper and the logger is not
             # initialized (so there's no safe path to log to), log the stack
             # trace at error level.
             logger.error(traceback.format_exc())
-        exit_code = ExitCodes.UnhandledError
-
-    _python2_compatibility_message()
+        exit_code = ExitCodes.UnhandledError.value
 
     sys.exit(exit_code)
 
@@ -124,34 +119,36 @@ def initialize_config_values(parsed):
     twice, but dbt's intialization is not structured in a way that makes that
     easy.
     """
-    try:
-        cfg = UserConfig.from_directory(parsed.profiles_dir)
-    except RuntimeException:
-        cfg = UserConfig.from_dict(None)
-
+    cfg = read_user_config(parsed.profiles_dir)
     cfg.set_values(parsed.profiles_dir)
 
 
 def handle_and_check(args):
-    parsed = parse_args(args)
-    profiler_enabled = False
+    with log_manager.applicationbound():
+        parsed = parse_args(args)
 
-    if parsed.record_timing_info:
-        profiler_enabled = True
+        # we've parsed the args - we can now decide if we're debug or not
+        if parsed.debug:
+            log_manager.set_debug()
 
-    with dbt.profiler.profiler(
-        enable=profiler_enabled,
-        outfile=parsed.record_timing_info
-    ):
+        profiler_enabled = False
 
-        initialize_config_values(parsed)
+        if parsed.record_timing_info:
+            profiler_enabled = True
 
-        reset_adapters()
+        with dbt.profiler.profiler(
+            enable=profiler_enabled,
+            outfile=parsed.record_timing_info
+        ):
 
-        task, res = run_from_args(parsed)
-        success = task.interpret_results(res)
+            initialize_config_values(parsed)
 
-        return res, success
+            reset_adapters()
+
+            task, res = run_from_args(parsed)
+            success = task.interpret_results(res)
+
+            return res, success
 
 
 @contextmanager
@@ -177,37 +174,24 @@ def track_run(task):
         dbt.tracking.flush()
 
 
-_PYTHON_27_WARNING = '''
-Python 2.7 will reach the end of its life on January 1st, 2020.
-Please upgrade your Python as Python 2.7 won't be maintained after that date.
-A future version of dbt will drop support for Python 2.7.
-'''.strip()
-
-
-def _python2_compatibility_message():
-    if dbt.compat.WHICH_PYTHON != 2:
-        return
-
-    logger.critical(
-        dbt.ui.printer.red('DEPRECATION: ') + _PYTHON_27_WARNING
-    )
-
-
 def run_from_args(parsed):
     log_cache_events(getattr(parsed, 'log_cache_events', False))
     flags.set_from_args(parsed)
 
     parsed.cls.pre_init_hook()
+    # we can now use the logger for stdout
+
     logger.info("Running with dbt{}".format(dbt.version.installed))
 
     # this will convert DbtConfigErrors into RuntimeExceptions
     task = parsed.cls.from_args(args=parsed)
-    logger.debug("running dbt with arguments %s", parsed)
+    logger.debug("running dbt with arguments {parsed}", parsed=str(parsed))
 
     log_path = None
     if task.config is not None:
         log_path = getattr(task.config, 'log_path', None)
-    initialize_logger(parsed.debug, log_path)
+    # we can finally set the file logger up
+    log_manager.set_path(log_path)
     logger.debug("Tracking: {}".format(dbt.tracking.active_user.state()))
 
     results = None
@@ -347,19 +331,11 @@ def _build_deps_subparser(subparsers, base_subparser):
     return sub
 
 
-def _build_snapshot_subparser(subparsers, base_subparser, which='snapshot'):
-    if which == 'archive':
-        helpmsg = (
-            'DEPRECATED: This command is deprecated and will\n'
-            'be removed in a future release. Use dbt snapshot instead.'
-        )
-    else:
-        helpmsg = 'Execute snapshots defined in your project'
-
+def _build_snapshot_subparser(subparsers, base_subparser):
     sub = subparsers.add_parser(
-        which,
+        'snapshot',
         parents=[base_subparser],
-        help=helpmsg)
+        help='Execute snapshots defined in your project')
     sub.add_argument(
         '--threads',
         type=int,
@@ -369,7 +345,7 @@ def _build_snapshot_subparser(subparsers, base_subparser, which='snapshot'):
         settings in profiles.yml.
         """
     )
-    sub.set_defaults(cls=snapshot_task.SnapshotTask, which=which)
+    sub.set_defaults(cls=snapshot_task.SnapshotTask, which='snapshot')
     return sub
 
 
@@ -391,6 +367,7 @@ def _build_compile_subparser(subparsers, base_subparser):
         "analysis files. \nCompiled SQL files are written to the target/"
         "directory.")
     sub.set_defaults(cls=compile_task.CompileTask, which='compile')
+    sub.add_argument('--parse-only', action='store_true')
     return sub
 
 
@@ -582,7 +559,8 @@ def _build_list_subparser(subparsers, base_subparser):
     sub = subparsers.add_parser(
         'list',
         parents=[base_subparser],
-        help='List the resources in your project'
+        help='List the resources in your project',
+        aliases=['ls'],
     )
     sub.set_defaults(cls=ListTask, which='list')
     resource_values = list(ListTask.ALL_RESOURCE_VALUES) + ['default', 'all']
@@ -619,9 +597,6 @@ def _build_list_subparser(subparsers, base_subparser):
         metavar='SELECTOR',
         help="Specify the models to exclude."
     )
-    # in python 3.x you can use the 'aliases' kwarg, but in python 2.7 you get
-    # to do this
-    subparsers._name_parser_map['ls'] = sub
     return sub
 
 
@@ -652,38 +627,6 @@ def _build_run_operation_subparser(subparsers, base_subparser):
     sub.set_defaults(cls=run_operation_task.RunOperationTask,
                      which='run-operation')
     return sub
-
-
-def _build_snapshot_migrate_subparser(subparsers, base_subparser):
-    sub = subparsers.add_parser(
-        'snapshot-migrate',
-        parents=[base_subparser],
-        help='Run the snapshot migration script'
-    )
-    sub.add_argument(
-        '--from-archive',
-        action='store_true',
-        help=('This flag is required for the 0.14.0 archive to snapshot '
-              'migration')
-    )
-    sub.add_argument(
-        '--apply-files',
-        action='store_true',
-        dest='write_files',
-        help='If set, write .sql files to disk instead of logging them'
-    )
-    sub.add_argument(
-        '--apply-database',
-        action='store_true',
-        dest='migrate_database',
-        help='If set, perform just the database migration'
-    )
-    sub.add_argument(
-        '--apply',
-        action='store_true',
-        help='If set, implies --apply-database --apply-files'
-    )
-    sub.set_defaults(cls=MigrationTask, which='migration')
 
 
 def parse_args(args):
@@ -722,6 +665,14 @@ def parse_args(args):
         debugging and making bug reports.''')
 
     p.add_argument(
+        '--no-write-json',
+        action='store_false',
+        dest='write_json',
+        help='''If set, skip writing the manifest and run_results.json files to
+        disk'''
+    )
+
+    p.add_argument(
         '-S',
         '--strict',
         action='store_true',
@@ -735,6 +686,15 @@ def parse_args(args):
         Examples include --models that selects nothing, deprecations,
         configurations with no associated models, invalid test configurations,
         and missing sources/refs in tests''')
+
+    p.add_argument(
+        '--partial-parse',
+        action='store_true',
+        help='''Allow for partial parsing by looking for and writing to a
+        pickle file in the target directory.
+        WARNING: This can result in unexpected behavior if you use env_var()!
+        '''
+    )
 
     # if set, run dbt in single-threaded mode: thread count is ignored, and
     # calls go through `map` instead of the thread pool. This is useful for
@@ -771,10 +731,8 @@ def parse_args(args):
     _build_debug_subparser(subs, base_subparser)
     _build_deps_subparser(subs, base_subparser)
     _build_list_subparser(subs, base_subparser)
-    _build_snapshot_migrate_subparser(subs, base_subparser)
 
     snapshot_sub = _build_snapshot_subparser(subs, base_subparser)
-    archive_sub = _build_snapshot_subparser(subs, base_subparser, 'archive')
     rpc_sub = _build_rpc_subparser(subs, base_subparser)
     run_sub = _build_run_subparser(subs, base_subparser)
     compile_sub = _build_compile_subparser(subs, base_subparser)
@@ -784,8 +742,7 @@ def parse_args(args):
     _add_common_arguments(run_sub, compile_sub, generate_sub, test_sub,
                           rpc_sub)
     # --models, --exclude
-    _add_selection_arguments(run_sub, compile_sub, generate_sub, test_sub,
-                             archive_sub)
+    _add_selection_arguments(run_sub, compile_sub, generate_sub, test_sub)
     _add_selection_arguments(snapshot_sub, models_name='select')
     # --full-refresh
     _add_table_mutability_arguments(run_sub, compile_sub)

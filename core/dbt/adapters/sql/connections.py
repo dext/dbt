@@ -5,7 +5,6 @@ import dbt.clients.agate_helper
 import dbt.exceptions
 from dbt.contracts.connection import Connection
 from dbt.adapters.base import BaseConnectionManager
-from dbt.compat import abstractclassmethod
 from dbt.logger import GLOBAL_LOGGER as logger
 
 
@@ -36,7 +35,10 @@ class SQLConnectionManager(BaseConnectionManager):
                 if connection is this_connection:
                     continue
 
-                self.cancel(connection)
+                # if the connection failed, the handle will be None so we have
+                # nothing to cancel.
+                if connection.handle is not None:
+                    self.cancel(connection)
                 names.append(connection.name)
         return names
 
@@ -51,20 +53,29 @@ class SQLConnectionManager(BaseConnectionManager):
 
         with self.exception_handler(sql):
             if abridge_sql_log:
-                logger.debug('On %s: %s....', connection.name, sql[0:512])
+                log_sql = '{}...'.format(sql[:512])
             else:
-                logger.debug('On %s: %s', connection.name, sql)
+                log_sql = sql
+
+            logger.debug(
+                'On {connection_name}: {sql}',
+                connection_name=connection.name,
+                sql=log_sql,
+            )
             pre = time.time()
 
             cursor = connection.handle.cursor()
             cursor.execute(sql, bindings)
 
-            logger.debug("SQL status: %s in %0.2f seconds",
-                         self.get_status(cursor), (time.time() - pre))
+            logger.debug(
+                "SQL status: {status} in {elapsed:0.2f} seconds",
+                status=self.get_status(cursor),
+                elapsed=(time.time() - pre)
+            )
 
             return connection, cursor
 
-    @abstractclassmethod
+    @abc.abstractclassmethod
     def get_status(cls, cursor):
         """Get the status of the cursor.
 
@@ -116,7 +127,7 @@ class SQLConnectionManager(BaseConnectionManager):
         if connection.transaction_open is True:
             raise dbt.exceptions.InternalException(
                 'Tried to begin a new transaction on connection "{}", but '
-                'it already had one open!'.format(connection.get('name')))
+                'it already had one open!'.format(connection.name))
 
         self.add_begin_query()
 

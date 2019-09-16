@@ -3,8 +3,6 @@ import os
 from test.integration.base import DBTIntegrationTest, use_profile
 
 from dbt.exceptions import CompilationException
-from dbt.compat import open_file
-
 
 
 class TestSimpleSeed(DBTIntegrationTest):
@@ -35,8 +33,7 @@ class TestSimpleSeed(DBTIntegrationTest):
         self.assertTablesEqual("seed_actual","seed_expected")
 
         # this should truncate the seed_actual table, then re-insert.
-        # also, '--show' should not crash dbt!
-        results = self.run_dbt(["seed", '--show'])
+        results = self.run_dbt(["seed"])
         self.assertEqual(len(results),  1)
         self.assertTablesEqual("seed_actual","seed_expected")
 
@@ -140,7 +137,7 @@ class TestSimpleSeedDisabled(DBTIntegrationTest):
 
 class TestSeedParsing(DBTIntegrationTest):
     def setUp(self):
-        super(TestSeedParsing, self).setUp()
+        super().setUp()
         self.run_sql_file("seed.sql")
 
     @property
@@ -163,8 +160,7 @@ class TestSeedParsing(DBTIntegrationTest):
         self.assertEqual(len(self.run_dbt(['run'])), 1)
 
         # make sure 'dbt seed' fails, otherwise our test is invalid!
-        with self.assertRaises(CompilationException):
-            self.run_dbt(['seed'])
+        self.run_dbt(['seed'], expect_pass=False)
 
 
 class TestSimpleSeedWithBOM(DBTIntegrationTest):
@@ -192,7 +188,7 @@ class TestSimpleSeedWithBOM(DBTIntegrationTest):
         # first make sure nobody "fixed" the file by accident
         seed_path = os.path.join(self.config.data_paths[0], 'seed_bom.csv')
         # 'data-bom/seed_bom.csv'
-        with open_file(seed_path) as fp:
+        with open(seed_path, encoding='utf-8') as fp:
             self.assertEqual(fp.read(1), u'\ufeff')
         results = self.run_dbt(["seed"])
         self.assertEqual(len(results),  1)

@@ -1,7 +1,6 @@
-from abc import ABCMeta, abstractmethod
 import os
-
-import six
+from abc import ABCMeta, abstractmethod
+from typing import Type, Union
 
 from dbt.config import RuntimeConfig, Project
 from dbt.config.profile import read_profile, PROFILES_DIR
@@ -10,7 +9,7 @@ from dbt.logger import GLOBAL_LOGGER as logger
 import dbt.exceptions
 
 
-class NoneConfig(object):
+class NoneConfig:
     @classmethod
     def from_args(cls, args):
         return None
@@ -38,9 +37,8 @@ https://docs.getdbt.com/docs/configure-your-profile
 """
 
 
-@six.add_metaclass(ABCMeta)
-class BaseTask(object):
-    ConfigType = NoneConfig
+class BaseTask(metaclass=ABCMeta):
+    ConfigType: Union[Type[NoneConfig], Type[Project]] = NoneConfig
 
     def __init__(self, args, config):
         self.args = args
@@ -129,7 +127,7 @@ class RequiresProjectTask(BaseTask):
     @classmethod
     def from_args(cls, args):
         move_to_nearest_project_dir(args)
-        return super(RequiresProjectTask, cls).from_args(args)
+        return super().from_args(args)
 
 
 class ConfiguredTask(RequiresProjectTask):

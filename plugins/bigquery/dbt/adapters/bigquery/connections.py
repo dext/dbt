@@ -1,4 +1,6 @@
 from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Optional, Any, Dict
 
 import google.auth
 import google.api_core
@@ -11,43 +13,29 @@ import dbt.exceptions
 from dbt.adapters.base import BaseConnectionManager, Credentials
 from dbt.logger import GLOBAL_LOGGER as logger
 
-
-BIGQUERY_CREDENTIALS_CONTRACT = {
-    'type': 'object',
-    'additionalProperties': False,
-    'properties': {
-        'method': {
-            'enum': ['oauth', 'service-account', 'service-account-json'],
-        },
-        'database': {
-            'type': 'string',
-        },
-        'schema': {
-            'type': 'string',
-        },
-        'keyfile': {
-            'type': 'string',
-        },
-        'keyfile_json': {
-            'type': 'object',
-        },
-        'timeout_seconds': {
-            'type': 'integer',
-        },
-        'location': {
-            'type': 'string',
-        },
-        'priority': {
-            'enum': ['interactive', 'batch'],
-        },
-    },
-    'required': ['method', 'database', 'schema'],
-}
+from hologram.helpers import StrEnum
 
 
+class Priority(StrEnum):
+    Interactive = 'interactive'
+    Batch = 'batch'
+
+
+class BigQueryConnectionMethod(StrEnum):
+    OAUTH = 'oauth'
+    SERVICE_ACCOUNT = 'service-account'
+    SERVICE_ACCOUNT_JSON = 'service-account-json'
+
+
+@dataclass
 class BigQueryCredentials(Credentials):
-    SCHEMA = BIGQUERY_CREDENTIALS_CONTRACT
-    ALIASES = {
+    method: BigQueryConnectionMethod
+    keyfile: Optional[str] = None
+    keyfile_json: Optional[Dict[str, Any]] = None
+    timeout_seconds: Optional[int] = 300
+    location: Optional[str] = None
+    priority: Optional[Priority] = None
+    _ALIASES = {
         'project': 'database',
         'dataset': 'schema',
     }
@@ -102,7 +90,7 @@ class BigQueryConnectionManager(BaseConnectionManager):
                 # this sounds a lot like a signal handler and probably has
                 # useful information, so raise it without modification.
                 raise
-            raise dbt.exceptions.RuntimeException(dbt.compat.to_string(e))
+            raise dbt.exceptions.RuntimeException(str(e))
 
     def cancel_open(self):
         pass
@@ -124,15 +112,15 @@ class BigQueryConnectionManager(BaseConnectionManager):
         method = profile_credentials.method
         creds = google.oauth2.service_account.Credentials
 
-        if method == 'oauth':
+        if method == BigQueryConnectionMethod.OAUTH:
             credentials, project_id = google.auth.default(scopes=cls.SCOPE)
             return credentials
 
-        elif method == 'service-account':
+        elif method == BigQueryConnectionMethod.SERVICE_ACCOUNT:
             keyfile = profile_credentials.keyfile
             return creds.from_service_account_file(keyfile, scopes=cls.SCOPE)
 
-        elif method == 'service-account-json':
+        elif method == BigQueryConnectionMethod.SERVICE_ACCOUNT_JSON:
             details = profile_credentials.keyfile_json
             return creds.from_service_account_info(details, scopes=cls.SCOPE)
 
@@ -178,8 +166,8 @@ class BigQueryConnectionManager(BaseConnectionManager):
 
     @classmethod
     def get_timeout(cls, conn):
-        credentials = conn['credentials']
-        return credentials.get('timeout_seconds', cls.QUERY_TIMEOUT)
+        credentials = conn.credentials
+        return credentials.timeout_seconds
 
     @classmethod
     def get_table_from_response(cls, resp):
@@ -191,13 +179,13 @@ class BigQueryConnectionManager(BaseConnectionManager):
         conn = self.get_thread_connection()
         client = conn.handle
 
-        logger.debug('On %s: %s', conn.name, sql)
+        logger.debug('On {}: {}', conn.name, sql)
 
         job_config = google.cloud.bigquery.QueryJobConfig()
         job_config.use_legacy_sql = False
 
-        priority = conn.credentials.get('priority', 'interactive')
-        if priority == "batch":
+        priority = conn.credentials.priority
+        if priority == Priority.Batch:
             job_config.priority = google.cloud.bigquery.QueryPriority.BATCH
         else:
             job_config.priority = \

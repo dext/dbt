@@ -1,3 +1,15 @@
+{% macro postgres__create_table_as(temporary, relation, sql) -%}
+  {%- set unlogged = config.get('unlogged', default=false) -%}
+
+  create {% if temporary -%}
+    temporary
+  {%- elif unlogged -%}
+    unlogged
+  {%- endif %} table {{ relation }}
+  as (
+    {{ sql }}
+  );
+{%- endmacro %}
 
 {% macro postgres__create_schema(database_name, schema_name) -%}
   {% if database_name -%}
@@ -78,7 +90,7 @@
 {% endmacro %}
 
 {% macro postgres__check_schema_exists(information_schema, schema) -%}
-  {% if database -%}
+  {% if information_schema.database -%}
     {{ adapter.verify_database(information_schema.database) }}
   {%- endif -%}
   {% call statement('check_schema_exists', fetch_result=True, auto_begin=False) %}

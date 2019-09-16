@@ -1,9 +1,12 @@
 from dbt.logger import GLOBAL_LOGGER as logger
-from dbt.exceptions import NotImplementedException, CompilationException, \
-    RuntimeException, InternalException, missing_materialization
+from dbt.exceptions import (
+    NotImplementedException, CompilationException, RuntimeException,
+    InternalException, missing_materialization
+)
 from dbt.node_types import NodeType
-from dbt.contracts.results import RunModelResult, collect_timing_info, \
-    SourceFreshnessResult, PartialResult, RemoteCompileResult, RemoteRunResult
+from dbt.contracts.results import (
+    RunModelResult, collect_timing_info, SourceFreshnessResult, PartialResult,
+)
 from dbt.compilation import compile_node
 
 import dbt.context.runtime
@@ -12,12 +15,10 @@ import dbt.utils
 import dbt.tracking
 import dbt.ui.printer
 import dbt.flags
-from dbt import rpc
 
 import threading
 import time
 import traceback
-from datetime import timedelta
 
 
 INTERNAL_ERROR_STRING = """This is an error in dbt. Please try again. If \
@@ -35,14 +36,18 @@ def track_model_run(index, num_nodes, run_model_result):
         "run_status": run_model_result.status,
         "run_skipped": run_model_result.skip,
         "run_error": None,
-        "model_materialization": dbt.utils.get_materialization(run_model_result.node),  # noqa
+        "model_materialization": dbt.utils.get_materialization(
+            run_model_result.node
+        ),
         "model_id": dbt.utils.get_hash(run_model_result.node),
-        "hashed_contents": dbt.utils.get_hashed_contents(run_model_result.node),  # noqa
+        "hashed_contents": dbt.utils.get_hashed_contents(
+            run_model_result.node
+        ),
         "timing": run_model_result.timing,
     })
 
 
-class ExecutionContext(object):
+class ExecutionContext:
     """During execution and error handling, dbt makes use of mutable state:
     timing information and the newest (compiled vs executed) form of the node.
     """
@@ -51,7 +56,7 @@ class ExecutionContext(object):
         self.node = node
 
 
-class BaseRunner(object):
+class BaseRunner:
     def __init__(self, config, adapter, node, node_index, num_nodes):
         self.config = config
         self.adapter = adapter
@@ -78,20 +83,20 @@ class BaseRunner(object):
         return result
 
     def _build_run_result(self, node, start_time, error, status, timing_info,
-                          skip=False, failed=None, warn=None):
+                          skip=False, fail=None, warn=None, agate_table=None):
         execution_time = time.time() - start_time
         thread_id = threading.current_thread().name
-        timing = [t.serialize() for t in timing_info]
         return RunModelResult(
             node=node,
             error=error,
             skip=skip,
             status=status,
-            failed=failed,
-            warned=warn,
+            fail=fail,
+            warn=warn,
             execution_time=execution_time,
             thread_id=thread_id,
-            timing=timing
+            timing=timing_info,
+            agate_table=agate_table,
         )
 
     def error_result(self, node, error, start_time, timing_info):
@@ -119,14 +124,15 @@ class BaseRunner(object):
             error=result.error,
             skip=result.skip,
             status=result.status,
-            failed=result.failed,
-            warn=result.warned,
-            timing_info=timing_info
+            fail=result.fail,
+            warn=result.warn,
+            timing_info=timing_info,
+            agate_table=result.agate_table,
         )
 
     def compile_and_execute(self, manifest, ctx):
         result = None
-        self.adapter.acquire_connection(self.node.get('name'))
+        self.adapter.acquire_connection(self.node.name)
         with collect_timing_info('compile') as timing_info:
             # if we fail here, we still have a compiled node to return
             # this has the benefit of showing a build path for the errant
@@ -148,7 +154,8 @@ class BaseRunner(object):
         if e.node is None:
             e.node = ctx.node
 
-        return dbt.compat.to_string(e)
+        logger.debug(str(e), exc_info=True)
+        return str(e)
 
     def _handle_internal_exception(self, e, ctx):
         build_path = self.node.build_path
@@ -159,11 +166,11 @@ class BaseRunner(object):
             error=str(e).strip(),
             note=INTERNAL_ERROR_STRING
         )
-        logger.debug(error)
-        return dbt.compat.to_string(e)
+        logger.debug(error, exc_info=True)
+        return str(e)
 
     def _handle_generic_exception(self, e, ctx):
-        node_description = self.node.get('build_path')
+        node_description = self.node.build_path
         if node_description is None:
             node_description = self.node.unique_id
         prefix = "Unhandled error while executing {}".format(node_description)
@@ -174,7 +181,7 @@ class BaseRunner(object):
 
         logger.error(error)
         logger.debug('', exc_info=True)
-        return dbt.compat.to_string(e)
+        return str(e)
 
     def handle_exception(self, e, ctx):
         catchable_errors = (CompilationException, RuntimeException)
@@ -224,7 +231,7 @@ class BaseRunner(object):
                 'Error releasing connection for node {}: {!s}\n{}'
                 .format(self.node.name, exc, traceback.format_exc())
             )
-            return dbt.compat.to_string(exc)
+            return str(exc)
 
         return None
 
@@ -332,6 +339,10 @@ class ModelRunner(CompileRunner):
         track_model_run(self.node_index, self.num_nodes, result)
         self.print_result_line(result)
 
+    def _build_run_model_result(self, model, context):
+        result = context['load_result']('main')
+        return RunModelResult(model, status=result.status)
+
     def execute(self, model, manifest):
         context = dbt.context.runtime.generate(
             model, self.config, manifest)
@@ -350,14 +361,12 @@ class ModelRunner(CompileRunner):
                                                           dbt_created=True)
         self.adapter.cache_new_relation(relation)
 
-        result = context['load_result']('main')
-
-        return RunModelResult(model, status=result.status)
+        return self._build_run_model_result(model, context)
 
 
 class FreshnessRunner(BaseRunner):
     def on_skip(self):
-        raise dbt.exceptions.RuntimeException(
+        raise RuntimeException(
             'Freshness: nodes cannot be skipped!'
         )
 
@@ -371,33 +380,10 @@ class FreshnessRunner(BaseRunner):
                                                    self.node_index,
                                                    self.num_nodes)
 
-    def _calculate_status(self, target_freshness, freshness):
-        """Calculate the status of a run.
-
-        :param dict target_freshness: The target freshness dictionary. It must
-            match the freshness spec.
-        :param timedelta freshness: The actual freshness of the data, as
-            calculated from the database's timestamps
-        """
-        # if freshness > warn_after > error_after, you'll get an error, not a
-        # warning
-        for key in ('error', 'warn'):
-            fullkey = '{}_after'.format(key)
-            if fullkey not in target_freshness:
-                continue
-
-            target = target_freshness[fullkey]
-            kwname = target['period'] + 's'
-            kwargs = {kwname: target['count']}
-            if freshness > timedelta(**kwargs).total_seconds():
-                return key
-        return 'pass'
-
     def _build_run_result(self, node, start_time, error, status, timing_info,
                           skip=False, failed=None):
         execution_time = time.time() - start_time
         thread_id = threading.current_thread().name
-        timing = [t.serialize() for t in timing_info]
         if status is not None:
             status = status.lower()
         return PartialResult(
@@ -406,12 +392,12 @@ class FreshnessRunner(BaseRunner):
             error=error,
             execution_time=execution_time,
             thread_id=thread_id,
-            timing=timing
+            timing=timing_info,
         )
 
     def from_run_result(self, result, start_time, timing_info):
         result.execution_time = (time.time() - start_time)
-        result.timing.extend(t.serialize() for t in timing_info)
+        result.timing.extend(timing_info)
         return result
 
     def execute(self, compiled_node, manifest):
@@ -425,10 +411,7 @@ class FreshnessRunner(BaseRunner):
                 manifest=manifest
             )
 
-        status = self._calculate_status(
-            compiled_node.freshness,
-            freshness['age']
-        )
+        status = compiled_node.freshness.status(freshness['age'])
 
         return SourceFreshnessResult(
             node=compiled_node,
@@ -473,7 +456,7 @@ class TestRunner(CompileRunner):
             num_cols = len(table.columns)
             raise RuntimeError(
                 "Bad test {name}: Returned {rows} rows and {cols} cols"
-                .format(name=test.get('name'), rows=num_rows, cols=num_cols))
+                .format(name=test.name, rows=num_rows, cols=num_cols))
 
         return table[0][0]
 
@@ -482,14 +465,14 @@ class TestRunner(CompileRunner):
 
     def execute(self, test, manifest):
         failed_rows = self.execute_test(test)
-        severity = test.config['severity'].upper()
+        severity = test.config.severity.upper()
 
         if failed_rows == 0:
             return RunModelResult(test, status=failed_rows)
         elif severity == 'ERROR' or dbt.flags.WARN_ERROR:
-            return RunModelResult(test, status=failed_rows, failed=True)
+            return RunModelResult(test, status=failed_rows, fail=True)
         else:
-            return RunModelResult(test, status=failed_rows, warned=True)
+            return RunModelResult(test, status=failed_rows, warn=True)
 
     def after_execute(self, result):
         self.print_result_line(result)
@@ -513,6 +496,12 @@ class SeedRunner(ModelRunner):
         dbt.ui.printer.print_start_line(description, self.node_index,
                                         self.num_nodes)
 
+    def _build_run_model_result(self, model, context):
+        result = super()._build_run_model_result(model, context)
+        agate_result = context['load_result']('agate_table')
+        result.agate_table = agate_result.table
+        return result
+
     def compile(self, manifest):
         return self.node
 
@@ -522,80 +511,3 @@ class SeedRunner(ModelRunner):
                                               schema_name,
                                               self.node_index,
                                               self.num_nodes)
-
-
-class RPCCompileRunner(CompileRunner):
-    def __init__(self, config, adapter, node, node_index, num_nodes):
-        super(RPCCompileRunner, self).__init__(config, adapter, node,
-                                               node_index, num_nodes)
-
-    def handle_exception(self, e, ctx):
-        if isinstance(e, dbt.exceptions.Exception):
-            if isinstance(e, dbt.exceptions.RuntimeException):
-                e.node = ctx.node
-            return rpc.dbt_error(e)
-        elif isinstance(e, rpc.RPCException):
-            return e
-        else:
-            return rpc.server_error(e)
-
-    def before_execute(self):
-        pass
-
-    def after_execute(self, result):
-        pass
-
-    def compile(self, manifest):
-        return compile_node(self.adapter, self.config, self.node, manifest, {},
-                            write=False)
-
-    def execute(self, compiled_node, manifest):
-        return RemoteCompileResult(
-            raw_sql=compiled_node.raw_sql,
-            compiled_sql=compiled_node.injected_sql,
-            node=compiled_node
-        )
-
-    def error_result(self, node, error, start_time, timing_info):
-        raise error
-
-    def ephemeral_result(self, node, start_time, timing_info):
-        raise NotImplementedException(
-            'cannot execute ephemeral nodes remotely!'
-        )
-
-    def from_run_result(self, result, start_time, timing_info):
-        timing = [t.serialize() for t in timing_info]
-        return RemoteCompileResult(
-            raw_sql=result.raw_sql,
-            compiled_sql=result.compiled_sql,
-            node=result.node,
-            timing=timing
-        )
-
-
-class RPCExecuteRunner(RPCCompileRunner):
-    def from_run_result(self, result, start_time, timing_info):
-        timing = [t.serialize() for t in timing_info]
-        return RemoteRunResult(
-            raw_sql=result.raw_sql,
-            compiled_sql=result.compiled_sql,
-            node=result.node,
-            table=result.table,
-            timing=timing
-        )
-
-    def execute(self, compiled_node, manifest):
-        status, table = self.adapter.execute(compiled_node.injected_sql,
-                                             fetch=True)
-        table = {
-            'column_names': list(table.column_names),
-            'rows': [list(row) for row in table]
-        }
-
-        return RemoteRunResult(
-            raw_sql=compiled_node.raw_sql,
-            compiled_sql=compiled_node.injected_sql,
-            node=compiled_node,
-            table=table
-        )

@@ -220,7 +220,7 @@ class BaseRelation(APIObject):
     def create_from_source(cls, source, **kwargs):
         quote_policy = dbt.utils.deep_merge(
             cls.DEFAULTS['quote_policy'],
-            source.quoting,
+            source.quoting.to_dict(),
             kwargs.get('quote_policy', {})
         )
         return cls.create(
@@ -240,9 +240,9 @@ class BaseRelation(APIObject):
         quote_policy = dbt.utils.merge(config.quoting, quote_policy)
 
         return cls.create(
-            database=node.get('database'),
-            schema=node.get('schema'),
-            identifier=node.get('alias'),
+            database=node.database,
+            schema=node.schema,
+            identifier=node.alias,
             table_name=table_name,
             quote_policy=quote_policy,
             **kwargs)
@@ -318,7 +318,7 @@ class BaseRelation(APIObject):
         return self.type == self.View
 
 
-class Column(object):
+class Column:
     TYPE_LABELS = {
         'STRING': 'TEXT',
         'TIMESTAMP': 'TIMESTAMP',

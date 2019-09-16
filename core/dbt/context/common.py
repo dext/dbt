@@ -2,14 +2,13 @@ import json
 import os
 
 from dbt.adapters.factory import get_adapter
-from dbt.compat import basestring
 from dbt.node_types import NodeType
-from dbt.contracts.graph.parsed import ParsedMacro, ParsedNode
 from dbt.include.global_project import PACKAGES
 from dbt.include.global_project import PROJECT_NAME as GLOBAL_PROJECT_NAME
 
 import dbt.clients.jinja
 import dbt.clients.agate_helper
+import dbt.exceptions
 import dbt.flags
 import dbt.tracking
 import dbt.writer
@@ -24,7 +23,7 @@ import pytz
 import datetime
 
 
-class RelationProxy(object):
+class RelationProxy:
     def __init__(self, adapter):
         self.quoting_config = adapter.config.quoting
         self.relation_type = adapter.Relation
@@ -45,7 +44,7 @@ class RelationProxy(object):
         return self.relation_type.create(*args, **kwargs)
 
 
-class BaseDatabaseWrapper(object):
+class BaseDatabaseWrapper:
     """
     Wrapper for runtime database interaction. Applies the runtime quote policy
     via a relation proxy.
@@ -68,7 +67,7 @@ class BaseDatabaseWrapper(object):
         return self.adapter.commit_if_has_connection()
 
 
-class BaseResolver(object):
+class BaseResolver:
     def __init__(self, db_wrapper, model, config, manifest):
         self.db_wrapper = db_wrapper
         self.model = model
@@ -219,7 +218,7 @@ def log(msg, info=False):
     return ''
 
 
-class Var(object):
+class Var:
     UndefinedVarError = "Required var '{}' not found in config:\nVars "\
                         "supplied to {} = {}"
     _VAR_NOTSET = object()
@@ -232,23 +231,13 @@ class Var(object):
         # precedence over context-based var definitions
         self.overrides = overrides
 
-        if isinstance(model, dict) and model.get('unique_id'):
-            local_vars = model.get('config', {}).get('vars', {})
-            self.model_name = model.get('name')
-        elif isinstance(model, ParsedMacro):
-            local_vars = {}  # macros have no config
-            self.model_name = model.name
-        elif isinstance(model, ParsedNode):
-            local_vars = model.config.get('vars', {})
-            self.model_name = model.name
-        elif model is None:
+        if model is None:
             # during config parsing we have no model and no local vars
             self.model_name = '<Configuration>'
             local_vars = {}
         else:
-            # still used for wrapping
-            self.model_name = model.nice_name
-            local_vars = model.config.get('vars', {})
+            self.model_name = model.name
+            local_vars = model.local_vars()
 
         self.local_vars = dbt.utils.merge(local_vars, overrides)
 
@@ -269,7 +258,7 @@ class Var(object):
     def get_rendered_var(self, var_name):
         raw = self.local_vars[var_name]
         # if bool/int/float/etc are passed in, don't compile anything
-        if not isinstance(raw, basestring):
+        if not isinstance(raw, str):
             return raw
 
         return dbt.clients.jinja.get_rendered(raw, self.context)
@@ -285,7 +274,7 @@ class Var(object):
 
 def write(node, target_path, subdirectory):
     def fn(payload):
-        node['build_path'] = dbt.writer.write_node(
+        node.build_path = dbt.writer.write_node(
             node, target_path, subdirectory, payload)
         return ''
 
@@ -368,6 +357,18 @@ def generate_config_context(cli_vars):
     return _add_tracking(context)
 
 
+def _build_load_agate_table(model):
+    def load_agate_table():
+        path = model.original_file_path
+        try:
+            table = dbt.clients.agate_helper.from_csv(path)
+        except ValueError as e:
+            dbt.exceptions.raise_compiler_error(str(e))
+        table.original_abspath = os.path.abspath(path)
+        return table
+    return load_agate_table
+
+
 def generate_base(model, model_dict, config, manifest, source_config,
                   provider, adapter=None):
     """Generate the common aspects of the config dict."""
@@ -378,9 +379,10 @@ def generate_base(model, model_dict, config, manifest, source_config,
     target_name = config.target_name
     target = config.to_profile_info()
     del target['credentials']
-    target.update(config.credentials.serialize(with_aliases=True))
+    target.update(config.credentials.to_dict(with_aliases=True))
     target['type'] = config.credentials.type
     target.pop('pass', None)
+    target.pop('password', None)
     target['name'] = target_name
 
     adapter = get_adapter(config)
@@ -399,12 +401,13 @@ def generate_base(model, model_dict, config, manifest, source_config,
             "Column": adapter.Column,
         },
         "column": adapter.Column,
-        "config": provider.Config(model_dict, source_config),
+        "config": provider.Config(model, source_config),
         "database": config.credentials.database,
         "env_var": env_var,
         "exceptions": dbt.exceptions.wrapped_exports(model),
         "execute": provider.execute,
         "flags": dbt.flags,
+        "load_agate_table": _build_load_agate_table(model),
         "graph": manifest.to_flat_graph(),
         "log": log,
         "model": model_dict,
@@ -428,8 +431,7 @@ def generate_base(model, model_dict, config, manifest, source_config,
     return context
 
 
-def modify_generated_context(context, model, model_dict, config, manifest,
-                             provider):
+def modify_generated_context(context, model, config, manifest, provider):
     cli_var_overrides = config.cli_vars
 
     context = _add_tracking(context)
@@ -440,8 +442,8 @@ def modify_generated_context(context, model, model_dict, config, manifest,
 
     context = _add_macros(context, model, manifest)
 
-    context["write"] = write(model_dict, config.target_path, 'run')
-    context["render"] = render(context, model_dict)
+    context["write"] = write(model, config.target_path, 'run')
+    context["render"] = render(context, model)
     context["var"] = provider.Var(model, context=context,
                                   overrides=cli_var_overrides)
     context['context'] = context
@@ -457,12 +459,11 @@ def generate_execute_macro(model, config, manifest, provider):
         - 'schema' does not use any 'model' information
      - they can't be configured with config() directives
     """
-    model_dict = model.serialize()
+    model_dict = model.to_dict()
     context = generate_base(model, model_dict, config, manifest, None,
                             provider)
 
-    return modify_generated_context(context, model, model_dict, config,
-                                    manifest, provider)
+    return modify_generated_context(context, model, config, manifest, provider)
 
 
 def generate_model(model, config, manifest, source_config, provider):
@@ -471,19 +472,20 @@ def generate_model(model, config, manifest, source_config, provider):
                             source_config, provider)
     # operations (hooks) don't get a 'this'
     if model.resource_type != NodeType.Operation:
-        this = get_this_relation(context['adapter'], config, model_dict)
+        this = get_this_relation(context['adapter'], config, model)
         context['this'] = this
     # overwrite schema/database if we have them, and hooks + sql
+    # the hooks should come in as dicts, at least for the `run_hooks` macro
+    # TODO: do we have to preserve this as backwards a compatibility thing?
     context.update({
-        'schema': model.get('schema', context['schema']),
-        'database': model.get('database', context['database']),
-        'pre_hooks': model.config.get('pre-hook'),
-        'post_hooks': model.config.get('post-hook'),
-        'sql': model.get('injected_sql'),
+        'schema': getattr(model, 'schema', context['schema']),
+        'database': getattr(model, 'database', context['database']),
+        'pre_hooks': [h.to_dict() for h in model.config.pre_hook],
+        'post_hooks': [h.to_dict() for h in model.config.post_hook],
+        'sql': getattr(model, 'injected_sql', None),
     })
 
-    return modify_generated_context(context, model, model_dict, config,
-                                    manifest, provider)
+    return modify_generated_context(context, model, config, manifest, provider)
 
 
 def generate(model, config, manifest, source_config=None, provider=None):

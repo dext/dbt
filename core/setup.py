@@ -9,7 +9,7 @@ def read(fname):
 
 
 package_name = "dbt-core"
-package_version = "0.14.1a1"
+package_version = "0.15.0a1"
 description = """dbt (data build tool) is a command line tool that helps \
 analysts and engineers transform data in their warehouse more effectively"""
 
@@ -31,6 +31,7 @@ setup(
             'include/global_project/macros/*.sql',
             'include/global_project/macros/**/*.sql',
             'include/global_project/macros/**/**/*.sql',
+            'py.typed',
         ]
     },
     test_suite='test',
@@ -54,5 +55,9 @@ setup(
         'jsonschema>=3.0.1,<4',
         'json-rpc>=1.12,<2',
         'werkzeug>=0.14.1,<0.15',
+        'dataclasses;python_version<"3.7"',
+        'hologram==0.0.3',
+        'logbook>=1.5,<1.6',
+        'pytest-logbook>=1.2.0,<1.3',
     ]
 )

@@ -1,16 +1,13 @@
-from __future__ import print_function
-
 import functools
 import time
 
 from dbt.logger import GLOBAL_LOGGER as logger
 from dbt.node_types import NodeType, RunHookType
-from dbt.node_runners import ModelRunner, RPCExecuteRunner
+from dbt.node_runners import ModelRunner
 
 import dbt.exceptions
 import dbt.flags
-from dbt.contracts.graph.parsed import Hook
-from dbt.hooks import get_hook_dict
+from dbt.hooks import get_hook
 from dbt.ui.printer import \
     print_hook_start_line, \
     print_hook_end_line, \
@@ -19,11 +16,11 @@ from dbt.ui.printer import \
     get_counts
 
 from dbt.compilation import compile_node
-from dbt.task.compile import CompileTask, RemoteCompileTask
+from dbt.task.compile import CompileTask
 from dbt.utils import get_nodes_by_tags
 
 
-class Timer(object):
+class Timer:
     def __init__(self):
         self.start = None
         self.end = None
@@ -43,7 +40,7 @@ class Timer(object):
 
 
 @functools.total_ordering
-class BiggestName(object):
+class BiggestName:
     def __lt__(self, other):
         return True
 
@@ -53,7 +50,7 @@ class BiggestName(object):
 
 class RunTask(CompileTask):
     def __init__(self, args, config):
-        super(RunTask, self).__init__(args, config)
+        super().__init__(args, config)
         self.ran_hooks = []
 
     def raise_on_first_error(self):
@@ -66,11 +63,9 @@ class RunTask(CompileTask):
         compiled = compile_node(adapter, self.config, hook, self.manifest,
                                 extra_context)
         statement = compiled.wrapped_sql
-        hook_index = hook.get('index', num_hooks)
-        hook_dict = get_hook_dict(statement, index=hook_index)
-        if dbt.flags.STRICT_MODE:
-            Hook(**hook_dict)
-        return hook_dict.get('sql', '')
+        hook_index = hook.index or num_hooks
+        hook_obj = get_hook(statement, index=hook_index)
+        return hook_obj.sql or ''
 
     def _hook_keyfunc(self, hook):
         package_name = hook.package_name
@@ -156,7 +151,7 @@ class RunTask(CompileTask):
         # errored failed skipped
         schemas = list(set(
             r.node.schema for r in results
-            if not any((r.error is not None, r.failed, r.skipped))
+            if not any((r.error is not None, r.fail, r.skipped))
         ))
         with adapter.connection_named('master'):
             self.safe_run_hooks(adapter, RunHookType.End,
@@ -179,10 +174,3 @@ class RunTask(CompileTask):
     def task_end_messages(self, results):
         if results:
             print_run_end_messages(results)
-
-
-class RemoteRunTask(RemoteCompileTask, RunTask):
-    METHOD_NAME = 'run'
-
-    def get_runner_type(self):
-        return RPCExecuteRunner

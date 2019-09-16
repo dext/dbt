@@ -1,9 +1,7 @@
 from copy import deepcopy
 import hashlib
 import os
-import pprint
 
-from dbt import compat
 from dbt.clients.system import resolve_path_from_base
 from dbt.clients.system import path_exists
 from dbt.clients.system import load_file_contents
@@ -11,7 +9,7 @@ from dbt.clients.yaml_helper import load_yaml_text
 from dbt.exceptions import DbtProjectError
 from dbt.exceptions import RecursionException
 from dbt.exceptions import SemverException
-from dbt.exceptions import ValidationException
+from dbt.exceptions import validator_error_message
 from dbt.exceptions import warn_or_error
 from dbt.semver import VersionSpecifier
 from dbt.semver import versions_compatible
@@ -19,10 +17,12 @@ from dbt.version import get_installed_version
 from dbt.ui import printer
 from dbt.utils import deep_map
 from dbt.utils import parse_cli_vars
-from dbt.parser.source_config import SourceConfig
+from dbt.source_config import SourceConfig
 
 from dbt.contracts.project import Project as ProjectContract
 from dbt.contracts.project import PackageConfig
+
+from hologram import ValidationError
 
 from .renderer import ConfigRenderer
 
@@ -66,7 +66,7 @@ def _dict_if_none(value):
 
 def _list_if_none_or_string(value):
     value = _list_if_none(value)
-    if isinstance(value, compat.basestring):
+    if isinstance(value, str):
         return [value]
     return value
 
@@ -119,9 +119,11 @@ def package_config_from_data(packages_data):
         packages_data = {'packages': []}
 
     try:
-        packages = PackageConfig(**packages_data)
-    except ValidationException as e:
-        raise DbtProjectError('Invalid package config: {}'.format(str(e)))
+        packages = PackageConfig.from_dict(packages_data)
+    except ValidationError as e:
+        raise DbtProjectError(
+            'Invalid package config: {}'.format(validator_error_message(e))
+        ) from e
     return packages
 
 
@@ -135,18 +137,17 @@ def _parse_versions(versions):
 
     Regardless, this will return a list of VersionSpecifiers
     """
-    if isinstance(versions, compat.basestring):
+    if isinstance(versions, str):
         versions = versions.split(',')
     return [VersionSpecifier.from_version_string(v) for v in versions]
 
 
-class Project(object):
+class Project:
     def __init__(self, project_name, version, project_root, profile_name,
                  source_paths, macro_paths, data_paths, test_paths,
                  analysis_paths, docs_paths, target_path, snapshot_paths,
                  clean_targets, log_path, modules_path, quoting, models,
-                 on_run_start, on_run_end, archive, seeds, dbt_version,
-                 packages):
+                 on_run_start, on_run_end, seeds, dbt_version, packages):
         self.project_name = project_name
         self.version = version
         self.project_root = project_root
@@ -166,7 +167,6 @@ class Project(object):
         self.models = models
         self.on_run_start = on_run_start
         self.on_run_end = on_run_end
-        self.archive = archive
         self.seeds = seeds
         self.dbt_version = dbt_version
         self.packages = packages
@@ -177,7 +177,6 @@ class Project(object):
         into empty containers, and to turn strings into arrays of strings.
         """
         handlers = {
-            ('archive',): _list_if_none,
             ('on-run-start',): _list_if_none_or_string,
             ('on-run-end',): _list_if_none_or_string,
         }
@@ -219,9 +218,9 @@ class Project(object):
             )
         # just for validation.
         try:
-            ProjectContract(**project_dict)
-        except ValidationException as e:
-            raise DbtProjectError(str(e))
+            ProjectContract.from_dict(project_dict)
+        except ValidationError as e:
+            raise DbtProjectError(validator_error_message(e)) from e
 
         # name/version are required in the Project definition, so we can assume
         # they are present
@@ -252,16 +251,18 @@ class Project(object):
         models = project_dict.get('models', {})
         on_run_start = project_dict.get('on-run-start', [])
         on_run_end = project_dict.get('on-run-end', [])
-        archive = project_dict.get('archive', [])
         seeds = project_dict.get('seeds', {})
         dbt_raw_version = project_dict.get('require-dbt-version', '>=0.0.0')
 
         try:
             dbt_version = _parse_versions(dbt_raw_version)
         except SemverException as e:
-            raise DbtProjectError(str(e))
+            raise DbtProjectError(str(e)) from e
 
-        packages = package_config_from_data(packages_dict)
+        try:
+            packages = package_config_from_data(packages_dict)
+        except ValidationError as e:
+            raise DbtProjectError(validator_error_message(e)) from e
 
         project = cls(
             project_name=name,
@@ -283,7 +284,6 @@ class Project(object):
             models=models,
             on_run_start=on_run_start,
             on_run_end=on_run_end,
-            archive=archive,
             seeds=seeds,
             dbt_version=dbt_version,
             packages=packages
@@ -294,7 +294,7 @@ class Project(object):
 
     def __str__(self):
         cfg = self.to_project_config(with_packages=True)
-        return pprint.pformat(cfg)
+        return str(cfg)
 
     def __eq__(self, other):
         if not (isinstance(other, self.__class__) and
@@ -330,21 +330,20 @@ class Project(object):
             'models': self.models,
             'on-run-start': self.on_run_start,
             'on-run-end': self.on_run_end,
-            'archive': self.archive,
             'seeds': self.seeds,
             'require-dbt-version': [
                 v.to_version_string() for v in self.dbt_version
             ],
         })
         if with_packages:
-            result.update(self.packages.serialize())
+            result.update(self.packages.to_dict())
         return result
 
     def validate(self):
         try:
-            ProjectContract(**self.to_project_config())
-        except ValidationException as exc:
-            raise DbtProjectError(str(exc))
+            ProjectContract.from_dict(self.to_project_config())
+        except ValidationError as e:
+            raise DbtProjectError(validator_error_message(e)) from e
 
     @classmethod
     def from_project_root(cls, project_root, cli_vars):
@@ -366,7 +365,7 @@ class Project(object):
                 .format(project_yaml_filepath)
             )
 
-        if isinstance(cli_vars, compat.basestring):
+        if isinstance(cli_vars, str):
             cli_vars = parse_cli_vars(cli_vars)
         renderer = ConfigRenderer(cli_vars)
 

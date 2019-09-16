@@ -1,6 +1,4 @@
-
 import json
-import logging
 import os
 import random
 import shutil
@@ -15,22 +13,34 @@ from functools import wraps
 
 import pytest
 import yaml
-from mock import patch
+from unittest.mock import patch
 
 import dbt.main as dbt
 import dbt.flags as flags
 from dbt.adapters.factory import get_adapter, reset_adapters
 from dbt.clients.jinja import template_cache
 from dbt.config import RuntimeConfig
-from dbt.compat import basestring
 from dbt.context import common
-from dbt.logger import GLOBAL_LOGGER as logger
+from dbt.logger import GLOBAL_LOGGER as logger, log_manager
 
 
 INITIAL_ROOT = os.getcwd()
 
 
-class FakeArgs(object):
+def normalize(path):
+    """On windows, neither is enough on its own:
+
+    >>> normcase('C:\\documents/ALL CAPS/subdir\\..')
+    'c:\\documents\\all caps\\subdir\\..'
+    >>> normpath('C:\\documents/ALL CAPS/subdir\\..')
+    'C:\\documents\\ALL CAPS'
+    >>> normpath(normcase('C:\\documents/ALL CAPS/subdir\\..'))
+    'c:\\documents\\all caps'
+    """
+    return os.path.normcase(os.path.normpath(path))
+
+
+class FakeArgs:
     def __init__(self):
         self.threads = 1
         self.data = False
@@ -41,7 +51,7 @@ class FakeArgs(object):
         self.single_threaded = False
 
 
-class TestArgs(object):
+class TestArgs:
     def __init__(self, kwargs):
         self.which = 'run'
         self.single_threaded = False
@@ -293,6 +303,7 @@ class DBTIntegrationTest(unittest.TestCase):
         os.symlink(self._logs_dir, os.path.join(self.test_root_dir, 'logs'))
 
     def setUp(self):
+        log_manager.reset_handlers()
         self.initial_dir = INITIAL_ROOT
         os.chdir(self.initial_dir)
         # before we go anywhere, collect the initial path info
@@ -301,7 +312,7 @@ class DBTIntegrationTest(unittest.TestCase):
         _really_makedirs(self._logs_dir)
         self.test_original_source_path = _pytest_get_test_root()
         print('test_original_source_path={}'.format(self.test_original_source_path))
-        self.test_root_dir = tempfile.mkdtemp(prefix='dbt-int-test-')
+        self.test_root_dir = normalize(tempfile.mkdtemp(prefix='dbt-int-test-'))
         print('test_root_dir={}'.format(self.test_root_dir))
         os.chdir(self.test_root_dir)
         try:
@@ -324,8 +335,6 @@ class DBTIntegrationTest(unittest.TestCase):
         self._created_schemas = set()
         flags.reset()
         template_cache.clear()
-        # disable capturing warnings
-        logging.captureWarnings(False)
 
         self.use_profile(self._pick_profile())
         self.use_default_project()
@@ -501,6 +510,7 @@ class DBTIntegrationTest(unittest.TestCase):
         return res
 
     def run_dbt_and_check(self, args=None, strict=True, parser=False, profiles_dir=True):
+        log_manager.reset_handlers()
         if args is None:
             args = ["run"]
 
@@ -598,10 +608,11 @@ class DBTIntegrationTest(unittest.TestCase):
                 else:
                     return
             except BaseException as e:
-                conn.handle.rollback()
+                if conn.handle and conn.handle.closed != 0:
+                    conn.handle.rollback()
                 print(sql)
                 print(e)
-                raise e
+                raise
             finally:
                 conn.transaction_open = False
 
@@ -741,7 +752,7 @@ class DBTIntegrationTest(unittest.TestCase):
         schema = self.unique_schema() if schema is None else schema
         database = self.default_database if database is None else database
         relation = self.adapter.Relation.create(
-            database = database,
+            database=database,
             schema=schema,
             identifier=table,
             type='table',
@@ -1136,19 +1147,19 @@ def use_profile(profile_name):
     return outer
 
 
-class AnyFloat(object):
+class AnyFloat:
     """Any float. Use this in assertEqual() calls to assert that it is a float.
     """
     def __eq__(self, other):
         return isinstance(other, float)
 
 
-class AnyStringWith(object):
+class AnyStringWith:
     def __init__(self, contains=None):
         self.contains = contains
 
     def __eq__(self, other):
-        if not isinstance(other, basestring):
+        if not isinstance(other, str):
             return False
 
         if self.contains is None:

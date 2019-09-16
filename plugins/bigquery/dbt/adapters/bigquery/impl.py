@@ -1,8 +1,5 @@
-from __future__ import absolute_import
-
 import copy
 
-import dbt.compat
 import dbt.deprecations
 import dbt.exceptions
 import dbt.flags as flags
@@ -98,8 +95,7 @@ class BigQueryAdapter(BaseAdapter):
 
     @available
     def check_schema_exists(self, database, schema):
-        superself = super(BigQueryAdapter, self)
-        return superself.check_schema_exists(database, schema)
+        return super().check_schema_exists(database, schema)
 
     def get_columns_in_relation(self, relation):
         try:
@@ -115,6 +111,10 @@ class BigQueryAdapter(BaseAdapter):
             return []
 
     def expand_column_types(self, goal, current):
+        # This is a no-op on BigQuery
+        pass
+
+    def expand_target_column_types(self, from_relation, to_relation):
         # This is a no-op on BigQuery
         pass
 
@@ -149,7 +149,7 @@ class BigQueryAdapter(BaseAdapter):
         if self._schema_is_cached(database, schema):
             # if it's in the cache, use the parent's model of going through
             # the relations cache and picking out the relation
-            return super(BigQueryAdapter, self).get_relation(
+            return super().get_relation(
                 database=database,
                 schema=schema,
                 identifier=identifier
@@ -162,11 +162,11 @@ class BigQueryAdapter(BaseAdapter):
         return self._bq_table_to_relation(table)
 
     def create_schema(self, database, schema):
-        logger.debug('Creating schema "%s.%s".', database, schema)
+        logger.debug('Creating schema "{}.{}".', database, schema)
         self.connections.create_dataset(database, schema)
 
     def drop_schema(self, database, schema):
-        logger.debug('Dropping schema "%s.%s".', database, schema)
+        logger.debug('Dropping schema "{}.{}".', database, schema)
 
         if not self.check_schema_exists(database, schema):
             return
@@ -393,9 +393,7 @@ class BigQueryAdapter(BaseAdapter):
         Resolves child columns as having the name "parent.child".
         """
         for col in self._get_dbt_columns_from_bq_table(table):
-            flattened = col.flatten()
-            for subcol in flattened:
-                yield subcol
+            yield from col.flatten()
 
     @classmethod
     def _get_stats_column_names(cls):

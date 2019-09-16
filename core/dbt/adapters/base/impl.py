@@ -3,13 +3,12 @@ from contextlib import contextmanager
 
 import agate
 import pytz
-import six
 
 import dbt.exceptions
 import dbt.flags
 import dbt.clients.agate_helper
 
-from dbt.compat import abstractclassmethod, classmethod
+from dbt.contracts.graph.manifest import Manifest
 from dbt.node_types import NodeType
 from dbt.loader import GraphLoader
 from dbt.logger import GLOBAL_LOGGER as logger
@@ -136,8 +135,7 @@ class SchemaSearchMap(dict):
         return new
 
 
-@six.add_metaclass(AdapterMeta)
-class BaseAdapter(object):
+class BaseAdapter(metaclass=AdapterMeta):
     """The BaseAdapter provides an abstract base class for adapters.
 
     Adapters must implement the following methods and macros. Some of the
@@ -255,14 +253,19 @@ class BaseAdapter(object):
     @property
     def _internal_manifest(self):
         if self._internal_manifest_lazy is None:
-            manifest = GraphLoader.load_internal(self.config)
-            self._internal_manifest_lazy = manifest
+            self.load_internal_manifest()
         return self._internal_manifest_lazy
 
     def check_internal_manifest(self):
         """Return the internal manifest (used for executing macros) if it's
         been initialized, otherwise return None.
         """
+        return self._internal_manifest_lazy
+
+    def load_internal_manifest(self) -> Manifest:
+        if self._internal_manifest_lazy is None:
+            manifest = GraphLoader.load_internal(self.config)
+            self._internal_manifest_lazy = manifest
         return self._internal_manifest_lazy
 
     ###
@@ -356,7 +359,7 @@ class BaseAdapter(object):
     ###
     # Abstract methods for database-specific values, attributes, and types
     ###
-    @abstractclassmethod
+    @abc.abstractclassmethod
     def date_function(cls):
         """Get the date function used by this adapter's database.
 
@@ -366,7 +369,7 @@ class BaseAdapter(object):
         raise dbt.exceptions.NotImplementedException(
             '`date_function` is not implemented for this adapter!')
 
-    @abstractclassmethod
+    @abc.abstractclassmethod
     def is_cancelable(cls):
         raise dbt.exceptions.NotImplementedException(
             '`is_cancelable` is not implemented for this adapter!'
@@ -707,7 +710,7 @@ class BaseAdapter(object):
         )
 
     @available
-    @abstractclassmethod
+    @abc.abstractclassmethod
     def quote(cls, identifier):
         """Quote the given identifier, as appropriate for the database.
 
@@ -737,7 +740,7 @@ class BaseAdapter(object):
     # Conversions: These must be implemented by concrete implementations, for
     # converting agate types into their sql equivalents.
     ###
-    @abstractclassmethod
+    @abc.abstractclassmethod
     def convert_text_type(cls, agate_table, col_idx):
         """Return the type in the database that best maps to the agate.Text
         type for the given agate table and column index.
@@ -750,7 +753,7 @@ class BaseAdapter(object):
         raise dbt.exceptions.NotImplementedException(
             '`convert_text_type` is not implemented for this adapter!')
 
-    @abstractclassmethod
+    @abc.abstractclassmethod
     def convert_number_type(cls, agate_table, col_idx):
         """Return the type in the database that best maps to the agate.Number
         type for the given agate table and column index.
@@ -763,7 +766,7 @@ class BaseAdapter(object):
         raise dbt.exceptions.NotImplementedException(
             '`convert_number_type` is not implemented for this adapter!')
 
-    @abstractclassmethod
+    @abc.abstractclassmethod
     def convert_boolean_type(cls, agate_table, col_idx):
         """Return the type in the database that best maps to the agate.Boolean
         type for the given agate table and column index.
@@ -776,7 +779,7 @@ class BaseAdapter(object):
         raise dbt.exceptions.NotImplementedException(
             '`convert_boolean_type` is not implemented for this adapter!')
 
-    @abstractclassmethod
+    @abc.abstractclassmethod
     def convert_datetime_type(cls, agate_table, col_idx):
         """Return the type in the database that best maps to the agate.DateTime
         type for the given agate table and column index.
@@ -789,7 +792,7 @@ class BaseAdapter(object):
         raise dbt.exceptions.NotImplementedException(
             '`convert_datetime_type` is not implemented for this adapter!')
 
-    @abstractclassmethod
+    @abc.abstractclassmethod
     def convert_date_type(cls, agate_table, col_idx):
         """Return the type in the database that best maps to the agate.Date
         type for the given agate table and column index.
@@ -802,7 +805,7 @@ class BaseAdapter(object):
         raise dbt.exceptions.NotImplementedException(
             '`convert_date_type` is not implemented for this adapter!')
 
-    @abstractclassmethod
+    @abc.abstractclassmethod
     def convert_time_type(cls, agate_table, col_idx):
         """Return the type in the database that best maps to the
         agate.TimeDelta type for the given agate table and column index.

@@ -1,13 +1,9 @@
 import networkx as nx
+from queue import PriorityQueue
 import threading
 
-from dbt.compat import PriorityQueue
+
 from dbt.node_types import NodeType
-
-
-GRAPH_SERIALIZE_BLACKLIST = [
-    'agate_table'
-]
 
 
 def from_file(graph_file):
@@ -21,7 +17,7 @@ def is_blocking_dependency(node):
     return node.resource_type == NodeType.Model
 
 
-class GraphQueue(object):
+class GraphQueue:
     """A fancy queue that is backed by the dependency graph.
     Note: this will mutate input!
 
@@ -194,7 +190,7 @@ def _subset_graph(graph, include_nodes):
     return new_graph
 
 
-class Linker(object):
+class Linker:
     def __init__(self, data=None):
         if data is None:
             data = {}
@@ -263,10 +259,6 @@ class Linker(object):
 def _updated_graph(graph, manifest):
     graph = graph.copy()
     for node_id in graph.nodes():
-        # serialize() removes the agate table
-        data = manifest.nodes[node_id].serialize()
-        for key in GRAPH_SERIALIZE_BLACKLIST:
-            if key in data:
-                del data[key]
+        data = manifest.nodes[node_id].to_dict()
         graph.add_node(node_id, **data)
     return graph

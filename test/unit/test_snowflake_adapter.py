@@ -1,14 +1,11 @@
-from mock import patch
-
-import mock
 import unittest
+from unittest import mock
 
 import dbt.flags as flags
 
-import dbt.adapters
 from dbt.adapters.snowflake import SnowflakeAdapter
-from dbt.exceptions import ValidationException
 from dbt.logger import GLOBAL_LOGGER as logger  # noqa
+from dbt.parser.results import ParseResult
 from snowflake import connector as snowflake_connector
 
 from .utils import config_from_parts_or_dicts, inject_adapter, mock_connection
@@ -52,15 +49,21 @@ class TestSnowflakeAdapter(unittest.TestCase):
             'dbt.adapters.snowflake.connections.snowflake.connector.connect')
         self.snowflake = self.patcher.start()
 
+        self.load_patch = mock.patch('dbt.loader.make_parse_result')
+        self.mock_parse_result = self.load_patch.start()
+        self.mock_parse_result.return_value = ParseResult.rpc()
+
         self.snowflake.return_value = self.handle
         self.adapter = SnowflakeAdapter(self.config)
         self.adapter.acquire_connection()
         inject_adapter(self.adapter)
 
+
     def tearDown(self):
         # we want a unique self.handle every time.
         self.adapter.cleanup_connections()
         self.patcher.stop()
+        self.load_patch.stop()
 
     def test_quoting_on_drop_schema(self):
         self.adapter.drop_schema(
@@ -168,8 +171,8 @@ class TestSnowflakeAdapter(unittest.TestCase):
         ])
 
     def test_client_session_keep_alive_true(self):
-        self.config.credentials = self.config.credentials.incorporate(
-            client_session_keep_alive=True)
+        self.config.credentials = self.config.credentials.replace(
+                                          client_session_keep_alive=True)
         self.adapter = SnowflakeAdapter(self.config)
         self.adapter.connections.set_connection_name(name='new_connection_with_new_config')
 
@@ -182,8 +185,9 @@ class TestSnowflakeAdapter(unittest.TestCase):
         ])
 
     def test_user_pass_authentication(self):
-        self.config.credentials = self.config.credentials.incorporate(
-            password='test_password')
+        self.config.credentials = self.config.credentials.replace(
+            password='test_password',
+        )
         self.adapter = SnowflakeAdapter(self.config)
         self.adapter.connections.set_connection_name(name='new_connection_with_new_config')
 
@@ -197,8 +201,10 @@ class TestSnowflakeAdapter(unittest.TestCase):
         ])
 
     def test_authenticator_user_pass_authentication(self):
-        self.config.credentials = self.config.credentials.incorporate(
-            password='test_password', authenticator='test_sso_url')
+        self.config.credentials = self.config.credentials.replace(
+            password='test_password',
+            authenticator='test_sso_url',
+        )
         self.adapter = SnowflakeAdapter(self.config)
         self.adapter.connections.set_connection_name(name='new_connection_with_new_config')
 
@@ -213,8 +219,9 @@ class TestSnowflakeAdapter(unittest.TestCase):
         ])
 
     def test_authenticator_externalbrowser_authentication(self):
-        self.config.credentials = self.config.credentials.incorporate(
-            authenticator='externalbrowser')
+        self.config.credentials = self.config.credentials.replace(
+            authenticator='externalbrowser'
+        )
         self.adapter = SnowflakeAdapter(self.config)
         self.adapter.connections.set_connection_name(name='new_connection_with_new_config')
 
@@ -227,11 +234,12 @@ class TestSnowflakeAdapter(unittest.TestCase):
                 private_key=None, application='dbt')
         ])
 
-    @patch('dbt.adapters.snowflake.SnowflakeConnectionManager._get_private_key', return_value='test_key')
+    @mock.patch('dbt.adapters.snowflake.SnowflakeCredentials._get_private_key', return_value='test_key')
     def test_authenticator_private_key_authentication(self, mock_get_private_key):
-        self.config.credentials = self.config.credentials.incorporate(
+        self.config.credentials = self.config.credentials.replace(
             private_key_path='/tmp/test_key.p8',
-            private_key_passphrase='p@ssphr@se')
+            private_key_passphrase='p@ssphr@se',
+        )
 
         self.adapter = SnowflakeAdapter(self.config)
         self.adapter.connections.set_connection_name(name='new_connection_with_new_config')
