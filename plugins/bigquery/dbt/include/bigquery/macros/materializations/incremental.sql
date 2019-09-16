@@ -8,9 +8,6 @@
   {%- set existing_relation = load_relation(this) %}
   {%- set tmp_relation = make_temp_relation(this) %}
 
-  {%- set old_relation = adapter.get_relation(database=database, schema=schema, identifier=identifier) -%}
-  {%- set target_relation = api.Relation.create(database=database, identifier=identifier, schema=schema, type='table') -%}
-
   {{ run_hooks(pre_hooks) }}
 
   {% if existing_relation is none %}
