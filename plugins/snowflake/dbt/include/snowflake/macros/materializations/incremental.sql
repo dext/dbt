@@ -47,7 +47,7 @@
   {% elif existing_relation.is_view %}
     {#-- Can't overwrite a view with a table - we must drop --#}
     {{ log("Dropping relation " ~ target_relation ~ " because it is a view and this model is a table.") }}
-    {% do adapter.drop_relation(target_relation) %}
+    {% do adapter.drop_relation(existing_relation) %}
     {% set build_sql = create_table_as(False, target_relation, sql) %}
   {% elif full_refresh_mode %}
     {% set build_sql = create_table_as(False, target_relation, sql) %}

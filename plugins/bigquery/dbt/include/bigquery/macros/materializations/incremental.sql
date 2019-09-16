@@ -17,12 +17,12 @@
       {% set build_sql = create_table_as(False, target_relation, sql) %}
   {% elif existing_relation.is_view %}
       {#-- There's no way to atomically replace a view with a table on BQ --#}
-      {{ adapter.drop_relation(old_relation) }}
+      {{ adapter.drop_relation(existing_relation) }}
       {% set build_sql = create_table_as(False, target_relation, sql) %}
   {% elif full_refresh_mode %}
       {% set build_sql = create_table_as(False, target_relation, sql) %}
   {% else %}
-     {% set dest_columns = adapter.get_columns_in_relation(target_relation) %}
+     {% set dest_columns = adapter.get_columns_in_relation(existing_relation) %}
 
      {#-- wrap sql in parens to make it a subquery --#}
      {% set source_sql -%}
