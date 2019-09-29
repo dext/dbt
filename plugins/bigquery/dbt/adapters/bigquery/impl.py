@@ -1,5 +1,3 @@
-import copy
-
 import dbt.deprecations
 import dbt.exceptions
 import dbt.flags as flags
@@ -393,19 +391,20 @@ class BigQueryAdapter(BaseAdapter):
         Returns an agate.Table of catalog information.
         """
 
-        information_schemas = self._get_cache_schemas(manifest)
-        # information schemas are addressed from datasets on BigQuery
-        info_schemas = []
-        for info_schema_rel, schemas in information_schemas.items():
-            for schema in schemas:
-                real_info_schema = self.Relation.create(
-                    database=info_schema_rel.database,
-                    schema=schema
-                )
-                info_schemas.append(real_info_schema)
+        information_schemas = []
+        for database, schema in manifest.get_used_schemas():
+            information_schema = self.Relation.create(
+                database=database,
+                schema=schema,
+                quoting={
+                    'database': True,
+                    'schema': True
+                }
+            )
+            information_schemas.append(information_schema)
 
         # make it a list so macros can index into it.
-        kwargs = {'information_schemas': info_schemas}
+        kwargs = {'information_schemas': information_schemas}
         table = self.execute_macro(GET_CATALOG_MACRO_NAME,
                                    kwargs=kwargs,
                                    release=True)

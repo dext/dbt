@@ -117,12 +117,26 @@
                 else unsharded_tables.table_name
             end as table_name,
             unsharded_tables.table_type,
-            case when is_date_shard then table_shards else null end as table_shards,
 
             columns.column_name,
             columns.column_index,
             columns.column_type,
             columns.column_comment,
+
+            '# Date Shards' as `stats__date_shards__label`,
+            table_shards.shard_count as `stats__date_shards__value`,
+            'The number of date shards in this table' as `stats__date_shards__description`,
+            is_date_shard as `stats__date_shards__include`,
+
+            'Shard (min)' as `stats__date_shard_min__label`,
+            table_shards.shard_min as `stats__date_shard_min__value`,
+            'The first date shard in this table' as `stats__date_shard_min__description`,
+            is_date_shard as `stats__date_shard_min__include`,
+
+            'Shard (max)' as `stats__date_shard_max__label`,
+            table_shards.shard_max as `stats__date_shard_max__value`,
+            'The last date shard in this table' as `stats__date_shard_max__description`,
+            is_date_shard as `stats__date_shard_max__include`,
 
             'Row Count' as `stats__row_count__label`,
             row_count as `stats__row_count__value`,
