@@ -74,6 +74,7 @@ class TableMetadata(JsonSchemaMixin):
     name: str
     comment: Optional[str]
     owner: Optional[str]
+    shards: Optional[str]
 
 
 @dataclass
