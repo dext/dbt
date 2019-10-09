@@ -4,7 +4,7 @@ from distutils.core import setup
 import os
 
 package_name = "dbt-postgres"
-package_version = "0.14.2-werkzeug"
+package_version = "0.14.299"
 description = """The postgres adpter plugin for dbt (data build tool)"""
 
 this_directory = os.path.abspath(os.path.dirname(__file__))

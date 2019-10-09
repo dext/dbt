@@ -10,7 +10,7 @@ with open(os.path.join(this_directory, 'README.md')) as f:
 
 
 package_name = "dbt"
-package_version = "0.14.2-werkzeug"
+package_version = "0.14.299"
 description = """With dbt, data analysts and engineers can build analytics \
 the way engineers build applications."""
 
