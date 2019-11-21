@@ -4,7 +4,7 @@ from distutils.core import setup
 import os
 
 package_name = "dbt-postgres"
-package_version = "0.14.1"
+package_version = "0.14.4"
 description = """The postgres adpter plugin for dbt (data build tool)"""
 
 this_directory = os.path.abspath(os.path.dirname(__file__))
@@ -30,6 +30,6 @@ setup(
     },
     install_requires=[
         'dbt-core=={}'.format(package_version),
-        'psycopg2>=2.7.5,<2.8',
+        'psycopg2>=2.7,<2.8',
     ]
 )
